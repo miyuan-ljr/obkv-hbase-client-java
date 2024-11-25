@@ -38,6 +38,7 @@ import com.alipay.oceanbase.rpc.stream.ObTableClientQueryAsyncStreamResult;
 import com.alipay.oceanbase.rpc.stream.ObTableClientQueryStreamResult;
 import com.alipay.oceanbase.rpc.table.ObHBaseParams;
 import com.alipay.oceanbase.rpc.table.ObKVParams;
+import com.alipay.oceanbase.rpc.util.ObBytesString;
 import com.alipay.sofa.common.thread.SofaThreadPoolExecutor;
 
 import com.google.protobuf.Descriptors;
@@ -805,7 +806,7 @@ public class OHTable implements HTableInterface {
         try {
             checkFamilyViolation(delete.getFamilyMap().keySet(), false);
             if (delete.getFamilyMap().isEmpty()) {
-                // For a Delete operation without any qualifiers, we construct a DeleteFamily request.  
+                // For a Delete operation without any qualifiers, we construct a DeleteFamily request.
                 // The server then performs the operation on all column families.
                 KeyValue kv = new KeyValue(delete.getRow(), delete.getTimeStamp(),
                     KeyValue.Type.DeleteFamily);
@@ -814,8 +815,8 @@ public class OHTable implements HTableInterface {
                     false, null);
                 results = batch.execute();
             } else if (delete.getFamilyMap().size() > 1) {
-                // Currently, the Delete Family operation type cannot transmit qualifiers to the server.  
-                // As a result, the server cannot identify which families need to be deleted.  
+                // Currently, the Delete Family operation type cannot transmit qualifiers to the server.
+                // As a result, the server cannot identify which families need to be deleted.
                 // Therefore, this process is handled sequentially.
                 boolean hasDeleteFamily = false;
                 for (Map.Entry<byte[], List<KeyValue>> entry : delete.getFamilyMap().entrySet()) {
@@ -1143,7 +1144,7 @@ public class OHTable implements HTableInterface {
                     Put aPut = writeBuffer.get(i);
                     Map<byte[], List<KeyValue>> innerFamilyMap = aPut.getFamilyMap();
                     if (innerFamilyMap.size() > 1) {
-                        // Bypass logic: directly construct BatchOperation for puts with family map size > 1  
+                        // Bypass logic: directly construct BatchOperation for puts with family map size > 1
                         try {
                             BatchOperation batch = buildBatchOperation(this.tableNameString,
                                 innerFamilyMap, false, null);
@@ -1162,7 +1163,7 @@ public class OHTable implements HTableInterface {
                                                   + " current buffer size " + writeBuffer.size(), e);
                         }
                     } else {
-                        // Existing logic for puts with family map size = 1  
+                        // Existing logic for puts with family map size = 1
                         for (Map.Entry<byte[], List<KeyValue>> entry : innerFamilyMap.entrySet()) {
                             String family = Bytes.toString(entry.getKey());
                             Pair<List<Integer>, List<KeyValue>> keyValueWithIndex = familyMap
@@ -1528,23 +1529,30 @@ public class OHTable implements HTableInterface {
                                            boolean includeStart, byte[] stop, boolean includeStop,
                                            boolean isReversed) {
         ObNewRange obNewRange = new ObNewRange();
-
-        if (Arrays.equals(start, HConstants.EMPTY_BYTE_ARRAY)) {
-            obNewRange.setStartKey(ObRowKey.getInstance(ObObj.getMin(), ObObj.getMin(),
-                ObObj.getMin()));
-        } else if (includeStart) {
-            obNewRange.setStartKey(ObRowKey.getInstance(start, ObObj.getMin(), ObObj.getMin()));
+        if (Arrays.equals(start, stop) && includeStart && includeStop
+            && filter.getSelectColumnQualifier().size() == 1) {
+            List<ObBytesString> qualifiers = filter.getSelectColumnQualifier();
+            ObBytesString q = qualifiers.get(0);
+            obNewRange.setStartKey(ObRowKey.getInstance(start, q.bytes, ObObj.getMin()));
+            obNewRange.setEndKey(ObRowKey.getInstance(stop, q.bytes, ObObj.getMax()));
         } else {
-            obNewRange.setStartKey(ObRowKey.getInstance(start, ObObj.getMax(), ObObj.getMax()));
-        }
+            if (Arrays.equals(start, HConstants.EMPTY_BYTE_ARRAY)) {
+                obNewRange.setStartKey(ObRowKey.getInstance(ObObj.getMin(), ObObj.getMin(),
+                    ObObj.getMin()));
+            } else if (includeStart) {
+                obNewRange.setStartKey(ObRowKey.getInstance(start, ObObj.getMin(), ObObj.getMin()));
+            } else {
+                obNewRange.setStartKey(ObRowKey.getInstance(start, ObObj.getMax(), ObObj.getMax()));
+            }
 
-        if (Arrays.equals(stop, HConstants.EMPTY_BYTE_ARRAY)) {
-            obNewRange.setEndKey(ObRowKey.getInstance(ObObj.getMax(), ObObj.getMax(),
-                ObObj.getMax()));
-        } else if (includeStop) {
-            obNewRange.setEndKey(ObRowKey.getInstance(stop, ObObj.getMax(), ObObj.getMax()));
-        } else {
-            obNewRange.setEndKey(ObRowKey.getInstance(stop, ObObj.getMin(), ObObj.getMin()));
+            if (Arrays.equals(stop, HConstants.EMPTY_BYTE_ARRAY)) {
+                obNewRange.setEndKey(ObRowKey.getInstance(ObObj.getMax(), ObObj.getMax(),
+                    ObObj.getMax()));
+            } else if (includeStop) {
+                obNewRange.setEndKey(ObRowKey.getInstance(stop, ObObj.getMax(), ObObj.getMax()));
+            } else {
+                obNewRange.setEndKey(ObRowKey.getInstance(stop, ObObj.getMin(), ObObj.getMin()));
+            }
         }
         ObTableQuery obTableQuery = new ObTableQuery();
         if (isReversed) {
@@ -1678,7 +1686,7 @@ public class OHTable implements HTableInterface {
     }
 
     private KeyValue modifyQualifier(KeyValue original, byte[] newQualifier) {
-        // Extract existing components  
+        // Extract existing components
         byte[] row = original.getRow();
         byte[] family = original.getFamily();
         byte[] value = original.getValue();
